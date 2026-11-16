@@ -4,7 +4,7 @@
 [Ll]og/
 [Ll]ogs/
 
-## Visual Studio / VS Code / Rider
+## Visual Studio / VS Code
 .vs/
 .vscode/
 .idea/
@@ -12,11 +12,6 @@
 *.suo
 *.userosscache
 *.sln.docstates
-*.sln.iml
-
-## Docker / Environment
-.env.local
-docker-compose.override.yml.local
 
 ## OS
 Thumbs.db
@@ -24,12 +19,3 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
-
-## Test results
-TestResults/
-[Tt]est[Rr]esult*/
-
-## NuGet
-*.nupkg
-*.snupkg
-
