@@ -1,8 +1,11 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Cấu hình dịch vụ (nếu cần)
+// Đăng ký dịch vụ SignalR phục vụ truyền thông thời gian thực (Thực hành 3.2)
+builder.Services.AddSignalR();
+
 var app = builder.Build();
 
 // ==============================================================================
@@ -58,15 +61,16 @@ var documents = new List<DocumentDto>
 };
 
 // ==============================================================================
-// Bước 3: API kiểm tra trạng thái và GET danh sách tài liệu
+// 1. API Kiểm tra trạng thái và GET danh sách tài liệu
 // ==============================================================================
 
 // GET / - Kiểm tra trạng thái máy chủ
 app.MapGet("/", () => Results.Ok(new
 {
-    service = "Document Approval API",
+    service = "Document Approval API with SignalR",
     status = "Healthy",
-    version = "1.0 (.NET 10 Minimal API)",
+    version = "2.0 (.NET 10 Minimal API & SignalR)",
+    signalRHub = "/hubs/approval",
     timestamp = DateTime.UtcNow
 }));
 
@@ -77,7 +81,7 @@ documentApi.MapGet("/", (string? keyword, string? status, string? createdBy, str
 {
     IEnumerable<DocumentDto> query = documents;
 
-    // Bước 13 (Mở rộng): Lọc theo keyword trong tiêu đề hoặc nội dung
+    // Lọc theo keyword trong tiêu đề hoặc nội dung
     if (!string.IsNullOrWhiteSpace(keyword))
     {
         var term = keyword.Trim().ToLower();
@@ -105,9 +109,7 @@ documentApi.MapGet("/", (string? keyword, string? status, string? createdBy, str
     return Results.Ok(query.ToList());
 });
 
-// ==============================================================================
-// Bước 4: GET chi tiết tài liệu và xử lý không tìm thấy
-// ==============================================================================
+// GET /api/documents/{id} - Xem chi tiết tài liệu
 documentApi.MapGet("/{id:int}", (int id) =>
 {
     var doc = documents.FirstOrDefault(d => d.Id == id);
@@ -118,12 +120,9 @@ documentApi.MapGet("/{id:int}", (int id) =>
     return Results.Ok(doc);
 });
 
-// ==============================================================================
-// Bước 5: POST tạo tài liệu mới và kiểm tra dữ liệu đầu vào (Validation)
-// ==============================================================================
-documentApi.MapPost("/", (CreateDocumentRequest request) =>
+// POST /api/documents - Tạo tài liệu mới (Draft)
+documentApi.MapPost("/", async (CreateDocumentRequest request, IHubContext<ApprovalHub> hubContext) =>
 {
-    // Kiểm tra dữ liệu hợp lệ
     if (string.IsNullOrWhiteSpace(request.Title))
     {
         return Results.BadRequest(new ApiError("INVALID_DOCUMENT", "Tiêu đề tài liệu không được để trống hoặc chỉ chứa khoảng trắng."));
@@ -134,7 +133,6 @@ documentApi.MapPost("/", (CreateDocumentRequest request) =>
         return Results.BadRequest(new ApiError("INVALID_DOCUMENT", "Người tạo tài liệu không được để trống hoặc chỉ chứa khoảng trắng."));
     }
 
-    // Sinh ID tiếp theo tự động
     var nextId = documents.Count > 0 ? documents.Max(d => d.Id) + 1 : 1;
 
     var newDoc = new DocumentDto(
@@ -154,16 +152,14 @@ documentApi.MapPost("/", (CreateDocumentRequest request) =>
 
     documents.Add(newDoc);
 
-    // Trả về 201 Created cùng header Location và nội dung tài nguyên vừa tạo
+    // Phát thông báo thời gian thực qua SignalR tới tất cả Client
+    await hubContext.Clients.All.SendAsync("ReceiveDocumentNotification", newDoc, "Created");
+
     return Results.Created($"/api/documents/{newDoc.Id}", newDoc);
 });
 
-// ==============================================================================
-// Các Endpoint chuyển đổi quy trình phê duyệt (State Machine - Đề tài 12)
-// ==============================================================================
-
-// POST /api/documents/{id}/submit - Gửi tài liệu vào quy trình phê duyệt
-documentApi.MapPost("/{id:int}/submit", (int id, SubmitDocumentRequest? request) =>
+// POST /api/documents/{id}/submit - Gửi phê duyệt
+documentApi.MapPost("/{id:int}/submit", async (int id, SubmitDocumentRequest? request, IHubContext<ApprovalHub> hubContext) =>
 {
     var doc = documents.FirstOrDefault(d => d.Id == id);
     if (doc is null)
@@ -171,7 +167,6 @@ documentApi.MapPost("/{id:int}/submit", (int id, SubmitDocumentRequest? request)
         return Results.NotFound(new ApiError("DOCUMENT_NOT_FOUND", $"Không tìm thấy tài liệu có mã ID: {id}."));
     }
 
-    // Ràng buộc quy trình: Chỉ tài liệu ở trạng thái Draft mới được submit
     if (doc.Status != "Draft")
     {
         return Results.BadRequest(new ApiError("INVALID_STATE_TRANSITION",
@@ -192,15 +187,18 @@ documentApi.MapPost("/{id:int}/submit", (int id, SubmitDocumentRequest? request)
         UpdatedAt = DateTime.UtcNow
     };
 
-    // Cập nhật lại trong danh sách
     var index = documents.FindIndex(d => d.Id == id);
     documents[index] = updatedDoc;
+
+    // Phát thông báo thời gian thực tới nhóm Người phê duyệt (Approvers)
+    await hubContext.Clients.Group("Approvers").SendAsync("ReceiveDocumentNotification", updatedDoc, "Submitted");
+    await hubContext.Clients.All.SendAsync("ReceiveBroadcast", "Hệ Thống", $"Tài liệu mã #{updatedDoc.Id} ('{updatedDoc.Title}') đã được gửi phê duyệt.");
 
     return Results.Ok(updatedDoc);
 });
 
 // POST /api/documents/{id}/approve - Phê duyệt tài liệu
-documentApi.MapPost("/{id:int}/approve", (int id, ReviewDocumentRequest? request) =>
+documentApi.MapPost("/{id:int}/approve", async (int id, ReviewDocumentRequest? request, IHubContext<ApprovalHub> hubContext) =>
 {
     var doc = documents.FirstOrDefault(d => d.Id == id);
     if (doc is null)
@@ -208,7 +206,6 @@ documentApi.MapPost("/{id:int}/approve", (int id, ReviewDocumentRequest? request
         return Results.NotFound(new ApiError("DOCUMENT_NOT_FOUND", $"Không tìm thấy tài liệu có mã ID: {id}."));
     }
 
-    // Ràng buộc quy trình: Chỉ tài liệu ở trạng thái Submitted mới được approve
     if (doc.Status != "Submitted")
     {
         return Results.BadRequest(new ApiError("INVALID_STATE_TRANSITION",
@@ -230,11 +227,15 @@ documentApi.MapPost("/{id:int}/approve", (int id, ReviewDocumentRequest? request
     var index = documents.FindIndex(d => d.Id == id);
     documents[index] = updatedDoc;
 
+    // Phát thông báo thời gian thực tới tất cả các client
+    await hubContext.Clients.All.SendAsync("ReceiveDocumentNotification", updatedDoc, "Approved");
+    await hubContext.Clients.All.SendAsync("ReceiveBroadcast", "Hệ Thống", $"Tài liệu mã #{updatedDoc.Id} đã được '{performedBy}' phê duyệt thành công!");
+
     return Results.Ok(updatedDoc);
 });
 
-// POST /api/documents/{id}/reject - Từ chối tài liệu kèm lý do
-documentApi.MapPost("/{id:int}/reject", (int id, ReviewDocumentRequest? request) =>
+// POST /api/documents/{id}/reject - Từ chối tài liệu
+documentApi.MapPost("/{id:int}/reject", async (int id, ReviewDocumentRequest? request, IHubContext<ApprovalHub> hubContext) =>
 {
     var doc = documents.FirstOrDefault(d => d.Id == id);
     if (doc is null)
@@ -242,7 +243,6 @@ documentApi.MapPost("/{id:int}/reject", (int id, ReviewDocumentRequest? request)
         return Results.NotFound(new ApiError("DOCUMENT_NOT_FOUND", $"Không tìm thấy tài liệu có mã ID: {id}."));
     }
 
-    // Ràng buộc quy trình: Chỉ tài liệu ở trạng thái Submitted mới được reject
     if (doc.Status != "Submitted")
     {
         return Results.BadRequest(new ApiError("INVALID_STATE_TRANSITION",
@@ -269,14 +269,89 @@ documentApi.MapPost("/{id:int}/reject", (int id, ReviewDocumentRequest? request)
     var index = documents.FindIndex(d => d.Id == id);
     documents[index] = updatedDoc;
 
+    await hubContext.Clients.All.SendAsync("ReceiveDocumentNotification", updatedDoc, "Rejected");
+    await hubContext.Clients.All.SendAsync("ReceiveBroadcast", "Hệ Thống", $"Tài liệu mã #{updatedDoc.Id} đã bị từ chối bởi '{performedBy}'. Lý do: {comment}");
+
     return Results.Ok(updatedDoc);
 });
+
+// ==============================================================================
+// 2. Đăng ký Tuyến SignalR Hub (Thực hành 3.2)
+// ==============================================================================
+app.MapHub<ApprovalHub>("/hubs/approval");
 
 // Chạy ứng dụng
 app.Run();
 
 // ==============================================================================
-// Bước 2: Khai báo các Record DTOs và ApiError ở cuối tệp
+// SignalR Hub: Lớp quản lý kết nối và điều hướng sự kiện thời gian thực
+// ==============================================================================
+public class ApprovalHub : Hub
+{
+    private readonly ILogger<ApprovalHub> _logger;
+
+    public ApprovalHub(ILogger<ApprovalHub> logger)
+    {
+        _logger = logger;
+    }
+
+    // TN1: Echo - Phản hồi chỉ gửi lại riêng cho máy khách gọi (Caller)
+    public async Task Echo(string message)
+    {
+        _logger.LogInformation("[SignalR Echo] Từ ConnectionId: {ConnectionId} - Nội dung: {Message}", Context.ConnectionId, message);
+        await Clients.Caller.SendAsync("ReceiveEcho", Context.ConnectionId, message);
+    }
+
+    // TN2: Broadcast - Phát thông điệp tới TẤT CẢ máy khách đang kết nối (All)
+    public async Task Broadcast(string sender, string message)
+    {
+        _logger.LogInformation("[SignalR Broadcast] Từ '{Sender}' ({ConnectionId}): {Message}", sender, Context.ConnectionId, message);
+        await Clients.All.SendAsync("ReceiveBroadcast", sender, message);
+    }
+
+    // TN3: Quản lý nhóm (Groups)
+    public async Task JoinGroup(string groupName)
+    {
+        groupName = groupName.Trim();
+        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+        _logger.LogInformation("[SignalR Group] Client {ConnectionId} đã tham gia nhóm '{GroupName}'", Context.ConnectionId, groupName);
+        
+        await Clients.Caller.SendAsync("JoinedGroup", groupName, Context.ConnectionId);
+        await Clients.Group(groupName).SendAsync("ReceiveGroupNotification", groupName, $"Thành viên [{Context.ConnectionId}] vừa tham gia nhóm '{groupName}'.");
+    }
+
+    public async Task LeaveGroup(string groupName)
+    {
+        groupName = groupName.Trim();
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, groupName);
+        _logger.LogInformation("[SignalR Group] Client {ConnectionId} đã rời nhóm '{GroupName}'", Context.ConnectionId, groupName);
+        
+        await Clients.Caller.SendAsync("LeftGroup", groupName, Context.ConnectionId);
+        await Clients.Group(groupName).SendAsync("ReceiveGroupNotification", groupName, $"Thành viên [{Context.ConnectionId}] đã rời nhóm '{groupName}'.");
+    }
+
+    public async Task SendToGroup(string groupName, string sender, string message)
+    {
+        groupName = groupName.Trim();
+        _logger.LogInformation("[SignalR SendToGroup] Nhóm '{GroupName}' từ '{Sender}': {Message}", groupName, sender, message);
+        await Clients.Group(groupName).SendAsync("ReceiveGroupMessage", groupName, sender, message);
+    }
+
+    public override async Task OnConnectedAsync()
+    {
+        _logger.LogInformation("[SignalR OnConnected] Client mới kết nối: {ConnectionId}", Context.ConnectionId);
+        await base.OnConnectedAsync();
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        _logger.LogInformation("[SignalR OnDisconnected] Client ngắt kết nối: {ConnectionId}", Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
+    }
+}
+
+// ==============================================================================
+// Khai báo các Record DTOs và ApiError
 // ==============================================================================
 public record DocumentDto(
     int Id,

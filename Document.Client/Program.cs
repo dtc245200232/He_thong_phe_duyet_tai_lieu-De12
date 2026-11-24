@@ -1,235 +1,283 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR.Client;
 
 // ==============================================================================
 // HỌC PHẦN: PHÁT TRIỂN ỨNG DỤNG PHÂN TÁN
-// THỰC HÀNH 2.2 - PHẦN A: ĐỌC HIỂU VÀ THỬ NGHIỆM
-// CHƯƠNG TRÌNH MÁY KHÁCH CONSOLE CLIENT - ĐỀ TÀI 12: PHÊ DUYỆT TÀI LIỆU
+// THỰC HÀNH 3.2 – A: SIGNALR THỜI GIAN THỰC & ĐỀ TÀI 12 (PHÊ DUYỆT TÀI LIỆU)
 // ==============================================================================
 
 var baseUrl = args.Length > 0 ? args[0] : "http://localhost:5100";
+var clientName = args.Length > 1 ? args[1] : $"Client-{new Random().Next(100, 999)}";
+var mode = args.Length > 2 ? args[2].ToLower() : "auto"; // "auto" hoặc "interactive"
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-PrintHeader("CHƯƠNG TRÌNH KHÁCH (CONSOLE CLIENT) - HỆ THỐNG PHÊ DUYỆT TÀI LIỆU");
-Console.WriteLine($"[+] Địa chỉ máy chủ API mục tiêu: {baseUrl}\n");
+PrintHeader($"MÁY KHÁCH SIGNALR & REST API: [{clientName}]");
+Console.WriteLine($"[+] Địa chỉ máy chủ API & Hub: {baseUrl}");
+Console.WriteLine($"[+] Chế độ hoạt động        : {(mode == "interactive" ? "Tương tác thủ công (Interactive)" : "Tự động kiểm thử (Automated)")}\n");
 
-using var client = new HttpClient
+using var httpClient = new HttpClient { BaseAddress = new Uri(baseUrl) };
+
+// ==============================================================================
+// 1. Khởi tạo và cấu hình kết nối SignalR Hub
+// ==============================================================================
+var hubUrl = $"{baseUrl}/hubs/approval";
+var hubConnection = new HubConnectionBuilder()
+    .WithUrl(hubUrl)
+    .WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) }) // TN4: Phục hồi kết nối tự động
+    .Build();
+
+// Đăng ký bắt các sự kiện vòng đời kết nối để phục vụ TN4 (Mất kết nối & Tự phục hồi)
+hubConnection.Reconnecting += error =>
 {
-    BaseAddress = new Uri(baseUrl)
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"\n[CẢNH BÁO MẤT KẾT NỐI - TN4] Đang mất liên lạc với máy chủ SignalR! Lý do: {error?.Message}");
+    Console.WriteLine("[TN4] Đang thử kết nối lại tự động (Reconnecting)... Vui lòng khởi động lại API để kiểm chứng!");
+    Console.ResetColor();
+    return Task.CompletedTask;
 };
 
-try
+hubConnection.Reconnected += connectionId =>
 {
-    // ==========================================================================
-    // KIỂM TRA SỨC KHỎE HỆ THỐNG (GET /)
-    // ==========================================================================
-    PrintSection("KIỂM TRA TRẠNG THÁI MÁY CHỦ (GET /)");
-    var healthResponse = await client.GetAsync("/");
-    if (healthResponse.IsSuccessStatusCode)
-    {
-        var healthJson = await healthResponse.Content.ReadAsStringAsync();
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[OK] Máy chủ đang hoạt động bình thường (HTTP {(int)healthResponse.StatusCode} {healthResponse.StatusCode})");
-        Console.WriteLine($"     Dữ liệu phản hồi: {healthJson}");
-        Console.ResetColor();
-    }
-    else
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine($"[ERROR] Không thể kết nối tới server. Mã lỗi: {healthResponse.StatusCode}");
-        Console.ResetColor();
-        return;
-    }
-
-    // ==========================================================================
-    // THỬ NGHIỆM 1 (TN1): TRUY XUẤT TÀI NGUYÊN (GET Danh Sách, GET Chi Tiết, GET 404)
-    // ==========================================================================
-    PrintSection("THỬ NGHIỆM 1 (TN1): TRUY XUẤT TÀI NGUYÊN (GET)");
-
-    // 1.1: GET /api/documents - Lấy toàn bộ danh sách
-    Console.WriteLine("[>] 1.1: Gọi GET /api/documents để lấy toàn bộ danh sách...");
-    var getListResp = await client.GetAsync("/api/documents");
-    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getListResp.StatusCode} {getListResp.StatusCode}");
-    var initialDocuments = await getListResp.Content.ReadFromJsonAsync<List<DocumentDto>>();
-    if (initialDocuments is not null)
-    {
-        Console.WriteLine($"    Số lượng tài liệu hiện có: {initialDocuments.Count}");
-        PrintDocumentTable(initialDocuments);
-    }
-
-    // 1.2: GET /api/documents/1 - Chi tiết tài liệu tồn tại
-    Console.WriteLine("\n[>] 1.2: Gọi GET /api/documents/1 (Tài nguyên có tồn tại)...");
-    var getDoc1Resp = await client.GetAsync("/api/documents/1");
     Console.ForegroundColor = ConsoleColor.Green;
-    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getDoc1Resp.StatusCode} {getDoc1Resp.StatusCode}");
-    var doc1 = await getDoc1Resp.Content.ReadFromJsonAsync<DocumentDto>();
-    if (doc1 is not null)
-    {
-        Console.WriteLine($"    [Dữ liệu] ID: {doc1.Id} | Tiêu đề: '{doc1.Title}' | Trạng thái: {doc1.Status} | Người tạo: {doc1.CreatedBy}");
-    }
+    Console.WriteLine($"\n[PHỤC HỒI THÀNH CÔNG - TN4] Đã kết nối lại thành công tới máy chủ SignalR!");
+    Console.WriteLine($"[TN4] ConnectionId mới: {connectionId}\n");
     Console.ResetColor();
+    return Task.CompletedTask;
+};
 
-    // 1.3: GET /api/documents/999 - Chi tiết tài liệu không tồn tại
-    Console.WriteLine("\n[>] 1.3: Gọi GET /api/documents/999 (ID không tồn tại)...");
-    var getDoc999Resp = await client.GetAsync("/api/documents/999");
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getDoc999Resp.StatusCode} {getDoc999Resp.StatusCode}");
-    var err999 = await getDoc999Resp.Content.ReadFromJsonAsync<ApiError>();
-    Console.WriteLine($"    [ApiError] Mã lỗi: [{err999?.Code}] | Thông điệp: '{err999?.Message}'");
-    Console.ResetColor();
-    Console.WriteLine("    => Giải thích: 200 trả về khi tìm thấy tài nguyên; 404 trả về khi ID hợp lệ về kiểu nhưng không tồn tại trong danh sách.");
-
-    // ==========================================================================
-    // THỬ NGHIỆM 2 (TN2): TẠO MỚI TÀI NGUYÊN BẰNG POST (201 Created & Header Location)
-    // ==========================================================================
-    PrintSection("THỬ NGHIỆM 2 (TN2): TẠO MỚI TÀI NGUYÊN BẰNG POST");
-
-    var newDocRequest = new CreateDocumentRequest(
-        Title: "Đơn xin cấp kinh phí thực tập tốt nghiệp năm 2026",
-        Content: "Kính gửi Ban Giám hiệu và Khoa CNTT phê duyệt dự toán kinh phí hỗ trợ đoàn sinh viên thực tập.",
-        CreatedBy: "nguyenvana",
-        AssignedApprover: "tranvanb"
-    );
-
-    Console.WriteLine($"[>] Gửi POST /api/documents với dữ liệu: '{newDocRequest.Title}'...");
-    var createResponse = await client.PostAsJsonAsync("/api/documents", newDocRequest);
-
-    int createdDocId = 0;
-    if (createResponse.StatusCode == HttpStatusCode.Created)
-    {
-        var location = createResponse.Headers.Location;
-        var createdDoc = await createResponse.Content.ReadFromJsonAsync<DocumentDto>();
-
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[OK] Tạo thành công! Mã trạng thái HTTP: {(int)createResponse.StatusCode} Created");
-        Console.WriteLine($"     Header Location trả về: {location}");
-        if (createdDoc is not null)
-        {
-            createdDocId = createdDoc.Id;
-            Console.WriteLine($"     Body tài nguyên mới: ID={createdDoc.Id} | Tiêu đề: '{createdDoc.Title}' | Trạng thái: {createdDoc.Status}");
-        }
-        Console.ResetColor();
-
-        // GET lại URL của sản phẩm mới qua Location header để kiểm chứng
-        if (location is not null)
-        {
-            Console.WriteLine($"\n[>] Gọi GET lại theo URI trong header Location ({location})...");
-            var getNewDocResp = await client.GetAsync(location);
-            var reloadedDoc = await getNewDocResp.Content.ReadFromJsonAsync<DocumentDto>();
-            Console.WriteLine($"    Xác nhận đọc lại thành công: ID={reloadedDoc?.Id} | Tiêu đề='{reloadedDoc?.Title}'");
-        }
-    }
-
-    // ==========================================================================
-    // THỬ NGHIỆM 3 (TN3): KIỂM TRA RÀNG BUỘC DỮ LIỆU (VALIDATION & TRIM KHOẢNG TRẮNG)
-    // ==========================================================================
-    PrintSection("THỬ NGHIỆM 3 (TN3): KIỂM TRA DỮ LIỆU (VALIDATION & TRIM)");
-
-    // 3.1: POST với tiêu đề rỗng
-    Console.WriteLine("[>] 3.1: Gửi POST với tiêu đề rỗng (Title = \"\")...");
-    var emptyTitleReq = new CreateDocumentRequest(Title: "", Content: "Nội dung kiểm thử", CreatedBy: "nguyenvana", AssignedApprover: null);
-    var emptyTitleResp = await client.PostAsJsonAsync("/api/documents", emptyTitleReq);
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"    Mã trạng thái HTTP: {(int)emptyTitleResp.StatusCode} {emptyTitleResp.StatusCode}");
-    var errEmpty = await emptyTitleResp.Content.ReadFromJsonAsync<ApiError>();
-    Console.WriteLine($"    [ApiError] Mã: [{errEmpty?.Code}] | Thông điệp: '{errEmpty?.Message}'");
-    Console.ResetColor();
-
-    // 3.2: POST với tiêu đề có khoảng trắng thừa đầu và cuối
-    Console.WriteLine("\n[>] 3.2: Gửi POST với tiêu đề có khoảng trắng thừa (\"   Đề xuất trang bị bảng vẽ điện tử   \")...");
-    var spacesReq = new CreateDocumentRequest(
-        Title: "   Đề xuất trang bị bảng vẽ điện tử   ",
-        Content: "Trang bị cho phòng thí nghiệm đồ họa.",
-        CreatedBy: "   nguyenvana   ",
-        AssignedApprover: "tranvanb"
-    );
-    var spacesResp = await client.PostAsJsonAsync("/api/documents", spacesReq);
-    if (spacesResp.StatusCode == HttpStatusCode.Created)
-    {
-        var spacesDoc = await spacesResp.Content.ReadFromJsonAsync<DocumentDto>();
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"    [OK] Tạo thành công tài liệu ID={spacesDoc?.Id}");
-        Console.WriteLine($"    Tiêu đề gốc gửi đi     : '{spacesReq.Title}'");
-        Console.WriteLine($"    Tiêu đề sau khi server Trim : '{spacesDoc?.Title}'");
-        Console.WriteLine($"    Người tạo sau khi server Trim: '{spacesDoc?.CreatedBy}'");
-        Console.WriteLine($"    => Kiểm chứng: Máy chủ API đã tự động loại bỏ toàn bộ khoảng trắng thừa bằng hàm .Trim()!");
-        Console.ResetColor();
-    }
-
-    // ==========================================================================
-    // THỬ NGHIỆM 4 (TN4): PHÂN BIỆT LỖI PHÍA CLIENT & HTTP STATUS CODE
-    // ==========================================================================
-    PrintSection("THỬ NGHIỆM 4 (TN4): PHÂN BIỆT LỖI HTTP 400 VỚI NGOẠI LỆ MẤT KẾT NỐI");
-    Console.WriteLine("    [Giải thích so sánh lý thuyết & thực nghiệm]:");
-    Console.WriteLine("    1. Lỗi HTTP 400 Bad Request (đã thấy ở TN3.1):");
-    Console.WriteLine("       - Kết nối TCP thành công, giao thức HTTP hoạt động bình thường.");
-    Console.WriteLine("       - Máy chủ chủ động trả về Status Code 400 cùng đối tượng lỗi ApiError để hướng dẫn client sửa dữ liệu.");
-    Console.WriteLine("    2. Ngoại lệ mất kết nối (khi dừng API hoặc sai cổng):");
-    Console.WriteLine("       - Không có kết nối TCP nào được thiết lập.");
-    Console.WriteLine("       - HttpClient văng ra ngoại lệ ở tầng mạng: System.Net.Http.HttpRequestException");
-    Console.WriteLine("       - Hoàn toàn KHÔNG có mã HTTP Status Code nào được sinh ra từ máy chủ.");
-
-    // ==========================================================================
-    // MỞ RỘNG ĐỀ TÀI 12: QUY TRÌNH PHÊ DUYỆT & LỌC QUERY STRING
-    // ==========================================================================
-    PrintSection("MỞ RỘNG (ĐỀ TÀI 12): QUY TRÌNH PHÊ DUYỆT (SUBMIT -> APPROVE)");
-
-    if (createdDocId > 0)
-    {
-        // Gửi duyệt tài liệu
-        Console.WriteLine($"[>] Gửi duyệt tài liệu ID={createdDocId} (POST /api/documents/{createdDocId}/submit)...");
-        var submitResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/submit",
-            new SubmitDocumentRequest("nguyenvana", "tranvanb", "Kính gửi Thầy phê duyệt dự toán."));
-        var submittedDoc = await submitResponse.Content.ReadFromJsonAsync<DocumentDto>();
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"    [OK] Trạng thái sau gửi duyệt: '{submittedDoc?.Status}' | Người duyệt: '{submittedDoc?.AssignedApprover}'");
-        Console.ResetColor();
-
-        // Phê duyệt tài liệu
-        Console.WriteLine($"\n[>] Người duyệt phê duyệt tài liệu ID={createdDocId} (POST /api/documents/{createdDocId}/approve)...");
-        var approveResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/approve",
-            new ReviewDocumentRequest("tranvanb", "Hồ sơ đầy đủ, phê duyệt dự toán."));
-        var approvedDoc = await approveResponse.Content.ReadFromJsonAsync<DocumentDto>();
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"    [OK] Trạng thái sau phê duyệt: '{approvedDoc?.Status}'");
-        Console.ResetColor();
-
-        // In dòng thời gian lịch sử xử lý (Audit History Timeline)
-        Console.WriteLine($"\n--- Lịch sử các bước xử lý (Audit Trail) của tài liệu ID={createdDocId} ---");
-        if (approvedDoc?.Histories is not null)
-        {
-            foreach (var h in approvedDoc.Histories)
-            {
-                Console.WriteLine($"   * [{h.Timestamp:yyyy-MM-dd HH:mm:ss}] Thao tác: {h.Action,-10} | Người thực hiện: {h.PerformedBy,-12} | Ghi chú: {h.Comment}");
-            }
-        }
-    }
-
-    // Lọc theo Query String (Bước 13 mở rộng)
-    PrintSection("MỞ RỘNG (BƯỚC 13): LỌC TÀI LIỆU THEO QUERY STRING");
-    Console.WriteLine("[>] Lọc tài liệu theo trạng thái Approved (GET /api/documents?status=Approved):");
-    var approvedDocs = await client.GetFromJsonAsync<List<DocumentDto>>("/api/documents?status=Approved");
-    if (approvedDocs is not null)
-    {
-        PrintDocumentTable(approvedDocs);
-    }
-
-    PrintHeader("HOÀN THÀNH TOÀN BỘ CÁC MỤC THỰC HÀNH CỦA BÀI TẬP!");
-}
-catch (HttpRequestException ex)
+hubConnection.Closed += error =>
 {
     Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine($"\n[NGOẠI LỆ MẤT KẾT NỐI (TN4)]: Không thể kết nối tới máy chủ API tại {baseUrl}!");
-    Console.WriteLine($"Chi tiết ngoại lệ: {ex.Message}");
-    Console.WriteLine($"Nguyên nhân: Máy chủ API chưa khởi động hoặc tiến trình đã bị dừng (Ctrl+C).");
+    Console.WriteLine($"\n[KẾT NỐI ĐÃ ĐÓNG - TN4] Kết nối SignalR đã bị đóng hoàn toàn! Lỗi: {error?.Message}\n");
+    Console.ResetColor();
+    return Task.CompletedTask;
+};
+
+// ==============================================================================
+// 2. Đăng ký nhận các sự kiện thời gian thực từ Server Hub
+// ==============================================================================
+
+// TN1: Nhận phản hồi Echo (chỉ Caller nhận)
+hubConnection.On<string, string>("ReceiveEcho", (connId, message) =>
+{
+    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.WriteLine($"\n<< [SIGNALR ECHO NHẬN VỀ (TN1)] Từ Hub tới riêng ConnectionId [{connId}]: '{message}'");
+    Console.ResetColor();
+});
+
+// TN2: Nhận tin nhắn Broadcast (Tất cả All nhận)
+hubConnection.On<string, string>("ReceiveBroadcast", (sender, message) =>
+{
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"\n<< [SIGNALR BROADCAST (TN2)] [Phát tới Tất Cả Client] Từ '{sender}': {message}");
+    Console.ResetColor();
+});
+
+// TN3: Nhận thông báo tham gia/rời nhóm
+hubConnection.On<string, string>("ReceiveGroupNotification", (groupName, note) =>
+{
+    Console.ForegroundColor = ConsoleColor.Magenta;
+    Console.WriteLine($"\n<< [SIGNALR GROUP NOTIFICATION (TN3)] Nhóm [{groupName}]: {note}");
+    Console.ResetColor();
+});
+
+// TN3: Nhận tin nhắn gửi riêng cho nhóm
+hubConnection.On<string, string, string>("ReceiveGroupMessage", (groupName, sender, message) =>
+{
+    Console.ForegroundColor = ConsoleColor.Blue;
+    Console.WriteLine($"\n<< [SIGNALR GROUP MESSAGE (TN3)] [Nhóm: {groupName}] Từ '{sender}': {message}");
+    Console.ResetColor();
+});
+
+// Thông báo sự kiện quy trình phê duyệt tài liệu thời gian thực
+hubConnection.On<DocumentDto, string>("ReceiveDocumentNotification", (doc, action) =>
+{
+    Console.ForegroundColor = ConsoleColor.DarkGreen;
+    Console.WriteLine($"\n<< [THÔNG BÁO TÀI LIỆU REALTIME] Thao tác: [{action}] | Mã tài liệu #{doc.Id}: '{doc.Title}' | Trạng thái: {doc.Status}");
+    Console.ResetColor();
+});
+
+// Bắt đầu kết nối tới Hub
+try
+{
+    await hubConnection.StartAsync();
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"[OK] Đã kết nối thành công tới SignalR Hub: {hubUrl}");
+    Console.WriteLine($"     Mã ConnectionId của máy khách: {hubConnection.ConnectionId}\n");
     Console.ResetColor();
 }
 catch (Exception ex)
 {
     Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine($"\n[LỖI NGOẠI LỆ]: {ex.Message}");
+    Console.WriteLine($"[LỖI] Không thể kết nối tới SignalR Hub tại {hubUrl}: {ex.Message}");
+    Console.WriteLine("Vui lòng đảm bảo rằng Document.Api đang chạy trên cổng 5100!\n");
     Console.ResetColor();
+    return;
+}
+
+// ==============================================================================
+// 3. Thực thi kịch bản theo chế độ: Tự động (Auto) hoặc Tương tác (Interactive)
+// ==============================================================================
+if (mode == "interactive")
+{
+    await RunInteractiveMenuAsync(hubConnection, httpClient, clientName);
+}
+else
+{
+    await RunAutomatedTestsAsync(hubConnection, httpClient, clientName);
+}
+
+// Giữ ứng dụng tiếp tục lắng nghe các sự kiện thời gian thực
+Console.WriteLine("\n[i] Client đang giữ kết nối để tiếp tục nhận thông báo thời gian thực. Bấm Enter để thoát...");
+Console.ReadLine();
+
+await hubConnection.StopAsync();
+Console.WriteLine("[i] Đã ngắt kết nối an toàn.");
+
+// ==============================================================================
+// Kịch bản tự động kiểm thử toàn diện TN1 - TN4 và RESTful API
+// ==============================================================================
+static async Task RunAutomatedTestsAsync(HubConnection hub, HttpClient http, string name)
+{
+    // TN1: Kết nối Hub và gọi Echo
+    PrintSection("THỬ NGHIỆM 1 (TN1): KẾT NỐI HUB & GỌI PHƯƠNG THỨC ECHO (CALLER ONLY)");
+    Console.WriteLine($"[>] Gửi lời gọi Echo: 'Xin chào từ {name} - Yêu cầu phản hồi riêng...'");
+    await hub.InvokeAsync("Echo", $"Tin nhắn kiểm thử Echo từ {name}");
+    await Task.Delay(500); // Đợi nhận phản hồi
+
+    // TN2: Gửi Broadcast tới tất cả các Client đang kết nối
+    PrintSection("THỬ NGHIỆM 2 (TN2): GỬI THÔNG ĐIỆP BROADCAST (TẤT CẢ CLIENT - ALL)");
+    Console.WriteLine($"[>] Gửi lời gọi Broadcast: '{name} thông báo: Cuộc họp phê duyệt tài liệu sẽ bắt đầu lúc 14h00.'");
+    await hub.InvokeAsync("Broadcast", name, "Cuộc họp phê duyệt tài liệu sẽ bắt đầu lúc 14h00.");
+    await Task.Delay(500);
+
+    // TN3: Quản lý nhóm (Groups)
+    PrintSection("THỬ NGHIỆM 3 (TN3): QUẢN LÝ NHÓM (GROUPS: JOIN VÀ SEND TO GROUP)");
+    Console.WriteLine($"[>] {name} tham gia nhóm 'Approvers' (Người phê duyệt)...");
+    await hub.InvokeAsync("JoinGroup", "Approvers");
+    await Task.Delay(500);
+
+    Console.WriteLine($"[>] Gửi tin nhắn nội bộ riêng cho nhóm 'Approvers'...");
+    await hub.InvokeAsync("SendToGroup", "Approvers", name, "Kính nhờ các anh/chị xem xét hồ sơ mới vừa gửi.");
+    await Task.Delay(500);
+
+    // Tích hợp RESTful API & SignalR Notification (Đề tài 12)
+    PrintSection("TÍCH HỢP ĐỀ TÀI 12: TẠO MỚI & PHÊ DUYỆT TÀI LIỆU KÈM SIGNALR REALTIME");
+    Console.WriteLine($"[>] Gửi yêu cầu REST API tạo mới tài liệu...");
+    var newDocReq = new CreateDocumentRequest(
+        Title: $"Đề xuất trang bị thiết bị văn phòng - do {name} tạo",
+        Content: "Cần mua bổ sung máy in mạng và máy scan tài liệu.",
+        CreatedBy: name,
+        AssignedApprover: "tranvanb"
+    );
+    var createResp = await http.PostAsJsonAsync("/api/documents", newDocReq);
+    if (createResp.StatusCode == HttpStatusCode.Created)
+    {
+        var created = await createResp.Content.ReadFromJsonAsync<DocumentDto>();
+        Console.WriteLine($"    [REST OK] Tài liệu mới đã tạo: ID={created?.Id} | Tiêu đề: '{created?.Title}'");
+        await Task.Delay(500);
+
+        if (created is not null)
+        {
+            Console.WriteLine($"\n[>] Gửi duyệt tài liệu #{created.Id} (sẽ kích hoạt SignalR thông báo tới nhóm 'Approvers')...");
+            await http.PostAsJsonAsync($"/api/documents/{created.Id}/submit", new SubmitDocumentRequest(name, "tranvanb", "Gửi duyệt hồ sơ thiết bị."));
+            await Task.Delay(500);
+
+            Console.WriteLine($"\n[>] Người duyệt phê duyệt tài liệu #{created.Id} (sẽ kích hoạt SignalR broadcast tới tất cả client)...");
+            await http.PostAsJsonAsync($"/api/documents/{created.Id}/approve", new ReviewDocumentRequest("tranvanb", "Đã phê duyệt mua sắm."));
+            await Task.Delay(500);
+        }
+    }
+
+    // TN4: Hướng dẫn quan sát mất kết nối và tự động phục hồi
+    PrintSection("THỬ NGHIỆM 4 (TN4): MẤT KẾT NỐI VÀ TỰ ĐỘNG PHỤC HỒI (RECONNECTING / RECONNECTED)");
+    Console.WriteLine("    [HƯỚNG DẪN THỰC NGHIỆM TN4]:");
+    Console.WriteLine("    1. Tại Terminal đang chạy Document.Api, nhấn tổ hợp phím [Ctrl + C] để tắt máy chủ.");
+    Console.WriteLine("    2. Quan sát cửa sổ này: Sự kiện Reconnecting sẽ lập tức kích hoạt và in cảnh báo vàng.");
+    Console.WriteLine("    3. Khởi chạy lại API (dotnet run --project Document.Api --urls http://localhost:5100).");
+    Console.WriteLine("    4. Quan sát cửa sổ này: Sự kiện Reconnected sẽ kích hoạt và in thông báo xanh báo phục hồi kết nối thành công!");
+}
+
+// ==============================================================================
+// Chế độ tương tác thủ công (Interactive Menu) để test giữa nhiều terminal
+// ==============================================================================
+static async Task RunInteractiveMenuAsync(HubConnection hub, HttpClient http, string name)
+{
+    while (true)
+    {
+        Console.WriteLine("\n================== MENU ĐIỀU KHIỂN SIGNALR ==================");
+        Console.WriteLine("1. Gửi Echo (TN1 - Chỉ bản thân nhận)");
+        Console.WriteLine("2. Gửi Broadcast (TN2 - Tất cả các client nhận)");
+        Console.WriteLine("3. Tham gia nhóm 'Approvers' (TN3)");
+        Console.WriteLine("4. Tham gia nhóm 'Creators' (TN3)");
+        Console.WriteLine("5. Gửi tin nhắn tới nhóm (TN3)");
+        Console.WriteLine("6. Rời nhóm hiện tại (TN3)");
+        Console.WriteLine("7. Xem danh sách tài liệu hiện có (REST API)");
+        Console.WriteLine("0. Thoát chương trình");
+        Console.Write("Lựa chọn của bạn [0-7]: ");
+
+        var choice = Console.ReadLine()?.Trim();
+        if (choice == "0") break;
+
+        try
+        {
+            switch (choice)
+            {
+                case "1":
+                    Console.Write("Nhập nội dung Echo: ");
+                    var echoMsg = Console.ReadLine() ?? "Echo test";
+                    await hub.InvokeAsync("Echo", echoMsg);
+                    break;
+                case "2":
+                    Console.Write("Nhập nội dung Broadcast tới tất cả: ");
+                    var bcastMsg = Console.ReadLine() ?? "Broadcast message";
+                    await hub.InvokeAsync("Broadcast", name, bcastMsg);
+                    break;
+                case "3":
+                    await hub.InvokeAsync("JoinGroup", "Approvers");
+                    Console.WriteLine(">> Đã gửi yêu cầu tham gia nhóm 'Approvers'");
+                    break;
+                case "4":
+                    await hub.InvokeAsync("JoinGroup", "Creators");
+                    Console.WriteLine(">> Đã gửi yêu cầu tham gia nhóm 'Creators'");
+                    break;
+                case "5":
+                    Console.Write("Nhập tên nhóm muốn gửi (Approvers/Creators): ");
+                    var grp = Console.ReadLine()?.Trim() ?? "Approvers";
+                    Console.Write("Nhập nội dung tin nhắn gửi nhóm: ");
+                    var grpMsg = Console.ReadLine() ?? "Hello Group";
+                    await hub.InvokeAsync("SendToGroup", grp, name, grpMsg);
+                    break;
+                case "6":
+                    Console.Write("Nhập tên nhóm muốn rời: ");
+                    var leaveGrp = Console.ReadLine()?.Trim() ?? "Approvers";
+                    await hub.InvokeAsync("LeaveGroup", leaveGrp);
+                    break;
+                case "7":
+                    var list = await http.GetFromJsonAsync<List<DocumentDto>>("/api/documents");
+                    if (list is not null)
+                    {
+                        Console.WriteLine($"\n--- Danh sách tài liệu hiện có ({list.Count}) ---");
+                        foreach (var d in list)
+                        {
+                            Console.WriteLine($"ID: {d.Id,-3} | {d.Title,-35} | Trạng thái: {d.Status,-10} | Người tạo: {d.CreatedBy}");
+                        }
+                    }
+                    break;
+                default:
+                    Console.WriteLine("Lựa chọn không hợp lệ!");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[LỖI THAO TÁC]: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
 }
 
 // ==============================================================================
@@ -253,20 +301,8 @@ static void PrintSection(string section)
     Console.ResetColor();
 }
 
-static void PrintDocumentTable(List<DocumentDto> docs)
-{
-    Console.WriteLine("{0,-4} | {1,-35} | {2,-12} | {3,-12} | {4,-10}", "ID", "Tiêu đề", "Người tạo", "Người duyệt", "Trạng thái");
-    Console.WriteLine(new string('-', 85));
-    foreach (var d in docs)
-    {
-        var title = d.Title.Length > 33 ? d.Title[..30] + "..." : d.Title;
-        Console.WriteLine("{0,-4} | {1,-35} | {2,-12} | {3,-12} | {4,-10}",
-            d.Id, title, d.CreatedBy, d.AssignedApprover ?? "Chưa có", d.Status);
-    }
-}
-
 // ==============================================================================
-// Khai báo DTOs tương thích với API trong dự án Client
+// DTOs
 // ==============================================================================
 public record DocumentDto(
     int Id,
