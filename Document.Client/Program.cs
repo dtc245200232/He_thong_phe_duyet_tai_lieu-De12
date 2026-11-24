@@ -1,17 +1,18 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 
 // ==============================================================================
-// Bước 6. Chương trình Console Client tương tác với Document Approval API
+// HỌC PHẦN: PHÁT TRIỂN ỨNG DỤNG PHÂN TÁN
+// THỰC HÀNH 2.2 - PHẦN A: ĐỌC HIỂU VÀ THỬ NGHIỆM
+// CHƯƠNG TRÌNH MÁY KHÁCH CONSOLE CLIENT - ĐỀ TÀI 12: PHÊ DUYỆT TÀI LIỆU
 // ==============================================================================
 
-// 1. Nhận URL API từ tham số dòng lệnh hoặc mặc định http://localhost:5100
 var baseUrl = args.Length > 0 ? args[0] : "http://localhost:5100";
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 PrintHeader("CHƯƠNG TRÌNH KHÁCH (CONSOLE CLIENT) - HỆ THỐNG PHÊ DUYỆT TÀI LIỆU");
-Console.WriteLine($"[+] Kết nối tới API Server tại: {baseUrl}\n");
+Console.WriteLine($"[+] Địa chỉ máy chủ API mục tiêu: {baseUrl}\n");
 
 using var client = new HttpClient
 {
@@ -20,16 +21,16 @@ using var client = new HttpClient
 
 try
 {
-    // --------------------------------------------------------------------------
-    // Hoạt động 0: Kiểm tra kết nối máy chủ
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 0: KIỂM TRA TRẠNG THÁI SERVER (GET /)");
+    // ==========================================================================
+    // KIỂM TRA SỨC KHỎE HỆ THỐNG (GET /)
+    // ==========================================================================
+    PrintSection("KIỂM TRA TRẠNG THÁI MÁY CHỦ (GET /)");
     var healthResponse = await client.GetAsync("/");
     if (healthResponse.IsSuccessStatusCode)
     {
         var healthJson = await healthResponse.Content.ReadAsStringAsync();
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[OK] Server đang hoạt động bình thường (HTTP {(int)healthResponse.StatusCode} {healthResponse.StatusCode})");
+        Console.WriteLine($"[OK] Máy chủ đang hoạt động bình thường (HTTP {(int)healthResponse.StatusCode} {healthResponse.StatusCode})");
         Console.WriteLine($"     Dữ liệu phản hồi: {healthJson}");
         Console.ResetColor();
     }
@@ -41,21 +42,49 @@ try
         return;
     }
 
-    // --------------------------------------------------------------------------
-    // Hoạt động 1: Đọc danh sách tài liệu ban đầu (GET /api/documents)
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 1: ĐỌC DANH SÁCH TÀI LIỆU (GET /api/documents)");
-    var initialDocuments = await client.GetFromJsonAsync<List<DocumentDto>>("/api/documents");
+    // ==========================================================================
+    // THỬ NGHIỆM 1 (TN1): TRUY XUẤT TÀI NGUYÊN (GET Danh Sách, GET Chi Tiết, GET 404)
+    // ==========================================================================
+    PrintSection("THỬ NGHIỆM 1 (TN1): TRUY XUẤT TÀI NGUYÊN (GET)");
+
+    // 1.1: GET /api/documents - Lấy toàn bộ danh sách
+    Console.WriteLine("[>] 1.1: Gọi GET /api/documents để lấy toàn bộ danh sách...");
+    var getListResp = await client.GetAsync("/api/documents");
+    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getListResp.StatusCode} {getListResp.StatusCode}");
+    var initialDocuments = await getListResp.Content.ReadFromJsonAsync<List<DocumentDto>>();
     if (initialDocuments is not null)
     {
-        Console.WriteLine($"Tổng số tài liệu hiện có trong hệ thống: {initialDocuments.Count}\n");
+        Console.WriteLine($"    Số lượng tài liệu hiện có: {initialDocuments.Count}");
         PrintDocumentTable(initialDocuments);
     }
 
-    // --------------------------------------------------------------------------
-    // Hoạt động 2: Tạo mới tài liệu dự thảo (POST /api/documents)
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 2: TẠO MỚI TÀI LIỆU HỢP LỆ (POST /api/documents)");
+    // 1.2: GET /api/documents/1 - Chi tiết tài liệu tồn tại
+    Console.WriteLine("\n[>] 1.2: Gọi GET /api/documents/1 (Tài nguyên có tồn tại)...");
+    var getDoc1Resp = await client.GetAsync("/api/documents/1");
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getDoc1Resp.StatusCode} {getDoc1Resp.StatusCode}");
+    var doc1 = await getDoc1Resp.Content.ReadFromJsonAsync<DocumentDto>();
+    if (doc1 is not null)
+    {
+        Console.WriteLine($"    [Dữ liệu] ID: {doc1.Id} | Tiêu đề: '{doc1.Title}' | Trạng thái: {doc1.Status} | Người tạo: {doc1.CreatedBy}");
+    }
+    Console.ResetColor();
+
+    // 1.3: GET /api/documents/999 - Chi tiết tài liệu không tồn tại
+    Console.WriteLine("\n[>] 1.3: Gọi GET /api/documents/999 (ID không tồn tại)...");
+    var getDoc999Resp = await client.GetAsync("/api/documents/999");
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"    Mã trạng thái HTTP: {(int)getDoc999Resp.StatusCode} {getDoc999Resp.StatusCode}");
+    var err999 = await getDoc999Resp.Content.ReadFromJsonAsync<ApiError>();
+    Console.WriteLine($"    [ApiError] Mã lỗi: [{err999?.Code}] | Thông điệp: '{err999?.Message}'");
+    Console.ResetColor();
+    Console.WriteLine("    => Giải thích: 200 trả về khi tìm thấy tài nguyên; 404 trả về khi ID hợp lệ về kiểu nhưng không tồn tại trong danh sách.");
+
+    // ==========================================================================
+    // THỬ NGHIỆM 2 (TN2): TẠO MỚI TÀI NGUYÊN BẰNG POST (201 Created & Header Location)
+    // ==========================================================================
+    PrintSection("THỬ NGHIỆM 2 (TN2): TẠO MỚI TÀI NGUYÊN BẰNG POST");
+
     var newDocRequest = new CreateDocumentRequest(
         Title: "Đơn xin cấp kinh phí thực tập tốt nghiệp năm 2026",
         Content: "Kính gửi Ban Giám hiệu và Khoa CNTT phê duyệt dự toán kinh phí hỗ trợ đoàn sinh viên thực tập.",
@@ -63,7 +92,7 @@ try
         AssignedApprover: "tranvanb"
     );
 
-    Console.WriteLine($"[>] Gửi yêu cầu tạo tài liệu: '{newDocRequest.Title}' - Người tạo: '{newDocRequest.CreatedBy}'");
+    Console.WriteLine($"[>] Gửi POST /api/documents với dữ liệu: '{newDocRequest.Title}'...");
     var createResponse = await client.PostAsJsonAsync("/api/documents", newDocRequest);
 
     int createdDocId = 0;
@@ -73,145 +102,128 @@ try
         var createdDoc = await createResponse.Content.ReadFromJsonAsync<DocumentDto>();
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"[OK] Tạo tài liệu thành công! (Mã HTTP: {(int)createResponse.StatusCode} Created)");
-        Console.WriteLine($"     Header Location: {location}");
+        Console.WriteLine($"[OK] Tạo thành công! Mã trạng thái HTTP: {(int)createResponse.StatusCode} Created");
+        Console.WriteLine($"     Header Location trả về: {location}");
         if (createdDoc is not null)
         {
             createdDocId = createdDoc.Id;
-            Console.WriteLine($"     Tài liệu vừa tạo: ID={createdDoc.Id} | Trạng thái: {createdDoc.Status} | Người tạo: {createdDoc.CreatedBy}");
+            Console.WriteLine($"     Body tài nguyên mới: ID={createdDoc.Id} | Tiêu đề: '{createdDoc.Title}' | Trạng thái: {createdDoc.Status}");
         }
         Console.ResetColor();
+
+        // GET lại URL của sản phẩm mới qua Location header để kiểm chứng
+        if (location is not null)
+        {
+            Console.WriteLine($"\n[>] Gọi GET lại theo URI trong header Location ({location})...");
+            var getNewDocResp = await client.GetAsync(location);
+            var reloadedDoc = await getNewDocResp.Content.ReadFromJsonAsync<DocumentDto>();
+            Console.WriteLine($"    Xác nhận đọc lại thành công: ID={reloadedDoc?.Id} | Tiêu đề='{reloadedDoc?.Title}'");
+        }
     }
-    else
+
+    // ==========================================================================
+    // THỬ NGHIỆM 3 (TN3): KIỂM TRA RÀNG BUỘC DỮ LIỆU (VALIDATION & TRIM KHOẢNG TRẮNG)
+    // ==========================================================================
+    PrintSection("THỬ NGHIỆM 3 (TN3): KIỂM TRA DỮ LIỆU (VALIDATION & TRIM)");
+
+    // 3.1: POST với tiêu đề rỗng
+    Console.WriteLine("[>] 3.1: Gửi POST với tiêu đề rỗng (Title = \"\")...");
+    var emptyTitleReq = new CreateDocumentRequest(Title: "", Content: "Nội dung kiểm thử", CreatedBy: "nguyenvana", AssignedApprover: null);
+    var emptyTitleResp = await client.PostAsJsonAsync("/api/documents", emptyTitleReq);
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.WriteLine($"    Mã trạng thái HTTP: {(int)emptyTitleResp.StatusCode} {emptyTitleResp.StatusCode}");
+    var errEmpty = await emptyTitleResp.Content.ReadFromJsonAsync<ApiError>();
+    Console.WriteLine($"    [ApiError] Mã: [{errEmpty?.Code}] | Thông điệp: '{errEmpty?.Message}'");
+    Console.ResetColor();
+
+    // 3.2: POST với tiêu đề có khoảng trắng thừa đầu và cuối
+    Console.WriteLine("\n[>] 3.2: Gửi POST với tiêu đề có khoảng trắng thừa (\"   Đề xuất trang bị bảng vẽ điện tử   \")...");
+    var spacesReq = new CreateDocumentRequest(
+        Title: "   Đề xuất trang bị bảng vẽ điện tử   ",
+        Content: "Trang bị cho phòng thí nghiệm đồ họa.",
+        CreatedBy: "   nguyenvana   ",
+        AssignedApprover: "tranvanb"
+    );
+    var spacesResp = await client.PostAsJsonAsync("/api/documents", spacesReq);
+    if (spacesResp.StatusCode == HttpStatusCode.Created)
     {
-        var error = await createResponse.Content.ReadFromJsonAsync<ApiError>();
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine($"[FAILED] Tạo thất bại! Mã: {createResponse.StatusCode} | Lỗi: [{error?.Code}] {error?.Message}");
+        var spacesDoc = await spacesResp.Content.ReadFromJsonAsync<DocumentDto>();
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"    [OK] Tạo thành công tài liệu ID={spacesDoc?.Id}");
+        Console.WriteLine($"    Tiêu đề gốc gửi đi     : '{spacesReq.Title}'");
+        Console.WriteLine($"    Tiêu đề sau khi server Trim : '{spacesDoc?.Title}'");
+        Console.WriteLine($"    Người tạo sau khi server Trim: '{spacesDoc?.CreatedBy}'");
+        Console.WriteLine($"    => Kiểm chứng: Máy chủ API đã tự động loại bỏ toàn bộ khoảng trắng thừa bằng hàm .Trim()!");
         Console.ResetColor();
     }
 
-    // --------------------------------------------------------------------------
-    // Hoạt động 3: Thao tác quy trình phê duyệt (Gửi duyệt -> Phê duyệt)
-    // --------------------------------------------------------------------------
+    // ==========================================================================
+    // THỬ NGHIỆM 4 (TN4): PHÂN BIỆT LỖI PHÍA CLIENT & HTTP STATUS CODE
+    // ==========================================================================
+    PrintSection("THỬ NGHIỆM 4 (TN4): PHÂN BIỆT LỖI HTTP 400 VỚI NGOẠI LỆ MẤT KẾT NỐI");
+    Console.WriteLine("    [Giải thích so sánh lý thuyết & thực nghiệm]:");
+    Console.WriteLine("    1. Lỗi HTTP 400 Bad Request (đã thấy ở TN3.1):");
+    Console.WriteLine("       - Kết nối TCP thành công, giao thức HTTP hoạt động bình thường.");
+    Console.WriteLine("       - Máy chủ chủ động trả về Status Code 400 cùng đối tượng lỗi ApiError để hướng dẫn client sửa dữ liệu.");
+    Console.WriteLine("    2. Ngoại lệ mất kết nối (khi dừng API hoặc sai cổng):");
+    Console.WriteLine("       - Không có kết nối TCP nào được thiết lập.");
+    Console.WriteLine("       - HttpClient văng ra ngoại lệ ở tầng mạng: System.Net.Http.HttpRequestException");
+    Console.WriteLine("       - Hoàn toàn KHÔNG có mã HTTP Status Code nào được sinh ra từ máy chủ.");
+
+    // ==========================================================================
+    // MỞ RỘNG ĐỀ TÀI 12: QUY TRÌNH PHÊ DUYỆT & LỌC QUERY STRING
+    // ==========================================================================
+    PrintSection("MỞ RỘNG (ĐỀ TÀI 12): QUY TRÌNH PHÊ DUYỆT (SUBMIT -> APPROVE)");
+
     if (createdDocId > 0)
     {
-        PrintSection($"HOẠT ĐỘNG 3: QUY TRÌNH PHÊ DUYỆT TÀI LIỆU VỪA TẠO (ID: {createdDocId})");
+        // Gửi duyệt tài liệu
+        Console.WriteLine($"[>] Gửi duyệt tài liệu ID={createdDocId} (POST /api/documents/{createdDocId}/submit)...");
+        var submitResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/submit",
+            new SubmitDocumentRequest("nguyenvana", "tranvanb", "Kính gửi Thầy phê duyệt dự toán."));
+        var submittedDoc = await submitResponse.Content.ReadFromJsonAsync<DocumentDto>();
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"    [OK] Trạng thái sau gửi duyệt: '{submittedDoc?.Status}' | Người duyệt: '{submittedDoc?.AssignedApprover}'");
+        Console.ResetColor();
 
-        // Bước 3.1: Gửi duyệt (Draft -> Submitted)
-        Console.WriteLine($"[>] Bước 3.1: Gửi tài liệu vào quy trình duyệt (POST /api/documents/{createdDocId}/submit)...");
-        var submitReq = new SubmitDocumentRequest(
-            PerformedBy: "nguyenvana",
-            AssignedApprover: "tranvanb",
-            Comment: "Em đã hoàn thiện hồ sơ, kính nhờ Thầy phê duyệt giúp em ạ."
-        );
-        var submitResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/submit", submitReq);
-        if (submitResponse.IsSuccessStatusCode)
+        // Phê duyệt tài liệu
+        Console.WriteLine($"\n[>] Người duyệt phê duyệt tài liệu ID={createdDocId} (POST /api/documents/{createdDocId}/approve)...");
+        var approveResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/approve",
+            new ReviewDocumentRequest("tranvanb", "Hồ sơ đầy đủ, phê duyệt dự toán."));
+        var approvedDoc = await approveResponse.Content.ReadFromJsonAsync<DocumentDto>();
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"    [OK] Trạng thái sau phê duyệt: '{approvedDoc?.Status}'");
+        Console.ResetColor();
+
+        // In dòng thời gian lịch sử xử lý (Audit History Timeline)
+        Console.WriteLine($"\n--- Lịch sử các bước xử lý (Audit Trail) của tài liệu ID={createdDocId} ---");
+        if (approvedDoc?.Histories is not null)
         {
-            var docSubmitted = await submitResponse.Content.ReadFromJsonAsync<DocumentDto>();
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[OK] Gửi duyệt thành công! Trạng thái mới: '{docSubmitted?.Status}' | Người duyệt: '{docSubmitted?.AssignedApprover}'");
-            Console.ResetColor();
-        }
-
-        // Bước 3.2: Người duyệt chấp thuận tài liệu (Submitted -> Approved)
-        Console.WriteLine($"\n[>] Bước 3.2: Người duyệt phê duyệt tài liệu (POST /api/documents/{createdDocId}/approve)...");
-        var approveReq = new ReviewDocumentRequest(
-            PerformedBy: "tranvanb",
-            Comment: "Hồ sơ hợp lệ, đồng ý cấp kinh phí theo đề xuất."
-        );
-        var approveResponse = await client.PostAsJsonAsync($"/api/documents/{createdDocId}/approve", approveReq);
-        if (approveResponse.IsSuccessStatusCode)
-        {
-            var docApproved = await approveResponse.Content.ReadFromJsonAsync<DocumentDto>();
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[OK] Phê duyệt thành công! Trạng thái mới: '{docApproved?.Status}'");
-            Console.ResetColor();
-
-            // In lịch sử xử lý của tài liệu vừa được duyệt
-            Console.WriteLine($"\n--- Lịch sử các bước xử lý (Audit Trail) của tài liệu ID={createdDocId} ---");
-            if (docApproved?.Histories is not null)
+            foreach (var h in approvedDoc.Histories)
             {
-                foreach (var h in docApproved.Histories)
-                {
-                    Console.WriteLine($"   * [{h.Timestamp:yyyy-MM-dd HH:mm:ss}] Thao tác: {h.Action,-10} | Người thực hiện: {h.PerformedBy,-12} | Ghi chú: {h.Comment}");
-                }
+                Console.WriteLine($"   * [{h.Timestamp:yyyy-MM-dd HH:mm:ss}] Thao tác: {h.Action,-10} | Người thực hiện: {h.PerformedBy,-12} | Ghi chú: {h.Comment}");
             }
         }
     }
 
-    // --------------------------------------------------------------------------
-    // Hoạt động 4: Đọc chi tiết tài liệu theo ID (GET /api/documents/1)
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 4: XEM CHI TIẾT TÀI LIỆU MÃ 1 (GET /api/documents/1)");
-    var doc1Response = await client.GetAsync("/api/documents/1");
-    if (doc1Response.IsSuccessStatusCode)
+    // Lọc theo Query String (Bước 13 mở rộng)
+    PrintSection("MỞ RỘNG (BƯỚC 13): LỌC TÀI LIỆU THEO QUERY STRING");
+    Console.WriteLine("[>] Lọc tài liệu theo trạng thái Approved (GET /api/documents?status=Approved):");
+    var approvedDocs = await client.GetFromJsonAsync<List<DocumentDto>>("/api/documents?status=Approved");
+    if (approvedDocs is not null)
     {
-        var doc1 = await doc1Response.Content.ReadFromJsonAsync<DocumentDto>();
-        if (doc1 is not null)
-        {
-            Console.WriteLine($"Mã tài liệu : {doc1.Id}");
-            Console.WriteLine($"Tiêu đề     : {doc1.Title}");
-            Console.WriteLine($"Nội dung    : {doc1.Content}");
-            Console.WriteLine($"Trạng thái  : {doc1.Status}");
-            Console.WriteLine($"Người tạo   : {doc1.CreatedBy}");
-            Console.WriteLine($"Người duyệt : {doc1.AssignedApprover ?? "Chưa phân công"}");
-            Console.WriteLine($"Thời gian   : {doc1.CreatedAt:yyyy-MM-dd HH:mm:ss}");
-        }
+        PrintDocumentTable(approvedDocs);
     }
 
-    // --------------------------------------------------------------------------
-    // Hoạt động 5: Kiểm tra phản hồi lỗi và ràng buộc tuyến (Validation & Error Testing)
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 5: KIỂM THỬ XỬ LÝ LỖI HTTP VÀ RÀNG BUỘC (400, 404)");
-
-    // Tình huống 5.1: Cố tình gửi POST với tiêu đề rỗng
-    Console.WriteLine("[>] Tình huống 5.1: Cố tình gửi POST với tiêu đề rỗng...");
-    var invalidReq = new CreateDocumentRequest(Title: "", Content: "Nội dung", CreatedBy: "testuser", AssignedApprover: null);
-    var invalidResponse = await client.PostAsJsonAsync("/api/documents", invalidReq);
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"    Mã trạng thái nhận được: {(int)invalidResponse.StatusCode} {invalidResponse.StatusCode}");
-    var err1 = await invalidResponse.Content.ReadFromJsonAsync<ApiError>();
-    Console.WriteLine($"    Nội dung lỗi ApiError  : Mã=[{err1?.Code}] | Thông điệp: '{err1?.Message}'");
+    PrintHeader("HOÀN THÀNH TOÀN BỘ CÁC MỤC THỰC HÀNH CỦA BÀI TẬP!");
+}
+catch (HttpRequestException ex)
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.WriteLine($"\n[NGOẠI LỆ MẤT KẾT NỐI (TN4)]: Không thể kết nối tới máy chủ API tại {baseUrl}!");
+    Console.WriteLine($"Chi tiết ngoại lệ: {ex.Message}");
+    Console.WriteLine($"Nguyên nhân: Máy chủ API chưa khởi động hoặc tiến trình đã bị dừng (Ctrl+C).");
     Console.ResetColor();
-
-    // Tình huống 5.2: Cố tình GET tài liệu không tồn tại (ID 999)
-    Console.WriteLine("\n[>] Tình huống 5.2: Cố tình gọi GET /api/documents/999 (ID không tồn tại)...");
-    var notFoundResponse = await client.GetAsync("/api/documents/999");
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"    Mã trạng thái nhận được: {(int)notFoundResponse.StatusCode} {notFoundResponse.StatusCode}");
-    var err2 = await notFoundResponse.Content.ReadFromJsonAsync<ApiError>();
-    Console.WriteLine($"    Nội dung lỗi ApiError  : Mã=[{err2?.Code}] | Thông điệp: '{err2?.Message}'");
-    Console.ResetColor();
-
-    // Tình huống 5.3: Cố tình gọi phê duyệt lại một tài liệu đã Approved (Vi phạm quy trình)
-    Console.WriteLine("\n[>] Tình huống 5.3: Cố tình gọi POST /api/documents/3/approve (Tài liệu 3 đã Approved)...");
-    var invalidTransitionResp = await client.PostAsJsonAsync("/api/documents/3/approve", new ReviewDocumentRequest("tranvanb", "Duyệt lại"));
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine($"    Mã trạng thái nhận được: {(int)invalidTransitionResp.StatusCode} {invalidTransitionResp.StatusCode}");
-    var err3 = await invalidTransitionResp.Content.ReadFromJsonAsync<ApiError>();
-    Console.WriteLine($"    Nội dung lỗi ApiError  : Mã=[{err3?.Code}] | Thông điệp: '{err3?.Message}'");
-    Console.ResetColor();
-
-    // --------------------------------------------------------------------------
-    // Hoạt động 6: Thực hành mở rộng - Lọc tài liệu theo Query String (Bước 13)
-    // --------------------------------------------------------------------------
-    PrintSection("HOẠT ĐỘNG 6 (BƯỚC 13 MỞ RỘNG): LỌC TÀI LIỆU THEO QUERY STRING");
-
-    Console.WriteLine("[>] 6.1: Lọc tài liệu có từ khóa 'báo cáo' (GET /api/documents?keyword=báo cáo):");
-    var filteredByKeyword = await client.GetFromJsonAsync<List<DocumentDto>>("/api/documents?keyword=b%C3%A1o%20c%C3%A1o");
-    if (filteredByKeyword is not null)
-    {
-        PrintDocumentTable(filteredByKeyword);
-    }
-
-    Console.WriteLine("\n[>] 6.2: Lọc tài liệu theo trạng thái 'Approved' (GET /api/documents?status=Approved):");
-    var filteredByStatus = await client.GetFromJsonAsync<List<DocumentDto>>("/api/documents?status=Approved");
-    if (filteredByStatus is not null)
-    {
-        PrintDocumentTable(filteredByStatus);
-    }
-
-    PrintHeader("HOÀN THÀNH TOÀN BỘ CÁC BƯỚC THỰC HÀNH CỦA BÀI TẬP!");
 }
 catch (Exception ex)
 {
@@ -254,7 +266,7 @@ static void PrintDocumentTable(List<DocumentDto> docs)
 }
 
 // ==============================================================================
-// Khai báo DTOs tương thích với API trong dự án Client (theo Bước 6)
+// Khai báo DTOs tương thích với API trong dự án Client
 // ==============================================================================
 public record DocumentDto(
     int Id,
